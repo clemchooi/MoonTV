@@ -1,40 +1,53 @@
-name: Upstream Sync
+name: Upstream Sync (PR)
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # run every 6 hours
+    - cron: "0 */6 * * *"   # every 6 hours
   workflow_dispatch:
 
 permissions:
   contents: write
-  actions: write
+  pull-requests: write
+  actions: write   # keep for the delete-runs step below
 
 jobs:
   sync_latest_from_upstream:
     name: Sync latest commits from upstream repo
     runs-on: ubuntu-latest
-    if: ${{ github.event.repository.fork }}
 
     steps:
-      # Step 1: run a standard checkout action
-      - name: Checkout target repo
+      - name: Checkout (full)
         uses: actions/checkout@v4
-
-      # Step 2: run the sync action
-      - name: Sync upstream changes
-        id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
         with:
-          upstream_sync_repo: senshinya/MoonTV
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Sync check
-        if: failure()
+      - name: Configure Git
         run: |
-          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
-          exit 1
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream & fetch
+        run: |
+          # IMPORTANT: new upstream
+          git remote add upstream https://github.com/MoonTechLab/LunaTV.git || true
+          git fetch upstream
+
+      # Create a branch that mirrors upstream/main exactly
+      - name: Create sync branch from upstream
+        run: |
+          git checkout -B ci/upstream-main upstream/main
+          git push -f origin ci/upstream-main
+
+      - name: Open/Update PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Sync: upstream → main"
+          body: "Automated sync from MoonTechLab/LunaTV."
+          head: ci/upstream-main
+          base: main
+          branch: ci/upstream-main
+          commit-message: "chore(sync): upstream → main"
 
       - name: Delete workflow runs
         uses: Mattraks/delete-workflow-runs@main
