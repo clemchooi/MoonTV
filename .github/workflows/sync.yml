@@ -2,19 +2,16 @@ name: Upstream Sync (PR)
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # every 6 hours
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
-  actions: write   # keep for the delete-runs step below
 
 jobs:
-  sync_latest_from_upstream:
-    name: Sync latest commits from upstream repo
+  sync:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout (full)
         uses: actions/checkout@v4
@@ -28,31 +25,43 @@ jobs:
 
       - name: Add upstream & fetch
         run: |
-          # IMPORTANT: new upstream
           git remote add upstream https://github.com/MoonTechLab/LunaTV.git || true
           git fetch upstream
+          git fetch origin
 
-      # Create a branch that mirrors upstream/main exactly
+      - name: Detect diff (upstream/main vs origin/main)
+        id: diffcheck
+        run: |
+          UP=$(git rev-parse upstream/main)
+          OR=$(git rev-parse origin/main || git rev-parse HEAD)
+          if [ "$UP" = "$OR" ]; then
+            echo "changes=false" >> $GITHUB_OUTPUT
+            echo "✅ Already up to date." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "🔄 Changes detected." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- upstream: $UP" >> $GITHUB_STEP_SUMMARY
+          echo "- origin  : $OR" >> $GITHUB_STEP_SUMMARY
+
       - name: Create sync branch from upstream
+        if: steps.diffcheck.outputs.changes == 'true'
         run: |
           git checkout -B ci/upstream-main upstream/main
           git push -f origin ci/upstream-main
 
       - name: Open/Update PR
+        id: cpr
+        if: steps.diffcheck.outputs.changes == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           title: "Sync: upstream → main"
           body: "Automated sync from MoonTechLab/LunaTV."
-          head: ci/upstream-main
-          base: main
           branch: ci/upstream-main
-          commit-message: "chore(sync): upstream → main"
+          base: main
 
-      - name: Delete workflow runs
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          retain_days: 0
-          keep_minimum_runs: 2
+      - name: Summarize result
+        run: |
+          if [ "${{ steps.diffcheck.outputs.changes }}" = "true" ]; then
+            echo "📌 PR: ${{ steps.cpr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
+          fi
